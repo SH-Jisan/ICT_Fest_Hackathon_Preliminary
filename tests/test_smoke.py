@@ -891,6 +891,44 @@ def test_room_stats_current_state():
     assert res_stats3.json()["total_price_cents"] == 1000
 
 
+def test_user_registration_compliance():
+    org_a = f"reg-org-a-{datetime.now().timestamp()}"
+    org_b = f"reg-org-b-{datetime.now().timestamp()}"
+
+    # 1. First register: success
+    res_reg1 = client.post(
+        "/auth/register",
+        json={"org_name": org_a, "username": "alice", "password": "pw12345"},
+    )
+    assert res_reg1.status_code == 201
+    assert res_reg1.json()["role"] == "admin"
+
+    # 2. Register duplicate username in Org A: must fail with 409 USERNAME_TAKEN
+    res_reg2 = client.post(
+        "/auth/register",
+        json={"org_name": org_a, "username": "alice", "password": "pw12345"},
+    )
+    assert res_reg2.status_code == 409
+    assert res_reg2.json()["code"] == "USERNAME_TAKEN"
+
+    # 3. Register same username in Org B: success
+    res_reg3 = client.post(
+        "/auth/register",
+        json={"org_name": org_b, "username": "alice", "password": "pw12345"},
+    )
+    assert res_reg3.status_code == 201
+    assert res_reg3.json()["role"] == "admin"
+
+    # 4. Register duplicate with leading/trailing whitespaces: must fail with 409 USERNAME_TAKEN
+    res_reg4 = client.post(
+        "/auth/register",
+        json={"org_name": f"  {org_a}  ", "username": " alice ", "password": "pw12345"},
+    )
+    assert res_reg4.status_code == 409
+    assert res_reg4.json()["code"] == "USERNAME_TAKEN"
+
+
+
 
 
 

@@ -22,35 +22,64 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.post("/register", status_code=201)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
-    org = db.query(Organization).filter(Organization.name == payload.org_name).first()
+    from sqlalchemy.exc import IntegrityError
+    
+    org_name = payload.org_name.strip()
+    username = payload.username.strip()
+    
+    org = db.query(Organization).filter(Organization.name == org_name).first()
     role = "admin" if org is None else "member"
-    if org is None:
-        org = Organization(name=payload.org_name)
-        db.add(org)
+    
+    try:
+        if org is None:
+            org = Organization(name=org_name)
+            db.add(org)
+            db.flush()
+        
+        existing = (
+            db.query(User)
+            .filter(User.org_id == org.id, User.username == username)
+            .first()
+        )
+        if existing is not None:
+            raise AppError(409, "USERNAME_TAKEN", "Username taken")
+            
+        user = User(
+            org_id=org.id,
+            username=username,
+            hashed_password=hash_password(payload.password),
+            role=role,
+        )
+        db.add(user)
         db.commit()
-        db.refresh(org)
+    except IntegrityError:
+        db.rollback()
+        # Handle concurrent registration collisions
+        org = db.query(Organization).filter(Organization.name == org_name).first()
+        if org is not None:
+            existing = (
+                db.query(User)
+                .filter(User.org_id == org.id, User.username == username)
+                .first()
+            )
+            if existing is not None:
+                raise AppError(409, "USERNAME_TAKEN", "Username taken")
+            
+            try:
+                user = User(
+                    org_id=org.id,
+                    username=username,
+                    hashed_password=hash_password(payload.password),
+                    role="member",
+                )
+                db.add(user)
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                raise AppError(409, "USERNAME_TAKEN", "Username taken")
+        else:
+            raise AppError(409, "USERNAME_TAKEN", "Username taken")
 
-    existing = (
-        db.query(User)
-        .filter(User.org_id == org.id, User.username == payload.username)
-        .first()
-    )
-    if existing is not None:
-        return {
-            "user_id": existing.id,
-            "org_id": org.id,
-            "username": existing.username,
-            "role": existing.role,
-        }
-
-    user = User(
-        org_id=org.id,
-        username=payload.username,
-        hashed_password=hash_password(payload.password),
-        role=role,
-    )
-    db.add(user)
-    db.commit()
     db.refresh(user)
     return {
         "user_id": user.id,
