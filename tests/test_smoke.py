@@ -105,3 +105,96 @@ def test_timezone_offset_handling():
     assert bad_booking.status_code == 400
     assert bad_booking.json()["code"] == "INVALID_BOOKING_WINDOW"
 
+
+def test_booking_rules_compliance():
+    org = f"rules-acme-{datetime.now().timestamp()}"
+    reg = client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "rules_alice", "password": "pw12345"},
+    )
+    token = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "rules_alice", "password": "pw12345"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    room_id = client.post(
+        "/rooms",
+        json={"name": "Rules Room", "capacity": 4, "hourly_rate_cents": 1000},
+        headers=headers,
+    ).json()["id"]
+
+    # 1. Test 1-hour booking: OK
+    now = datetime.now(timezone.utc)
+    start_1 = (now + timedelta(days=1)).replace(minute=0, second=0, microsecond=0)
+    end_1 = start_1 + timedelta(hours=1)
+    res_1 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_1.isoformat(), "end_time": end_1.isoformat()},
+        headers=headers,
+    )
+    assert res_1.status_code == 201
+    assert res_1.json()["price_cents"] == 1000
+
+    # 2. Test 8-hour booking: OK
+    start_8 = (now + timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
+    end_8 = start_8 + timedelta(hours=8)
+    res_8 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_8.isoformat(), "end_time": end_8.isoformat()},
+        headers=headers,
+    )
+    assert res_8.status_code == 201
+    assert res_8.json()["price_cents"] == 8000
+
+    # 3. Test 9-hour booking: Fail (400)
+    start_9 = (now + timedelta(days=3)).replace(minute=0, second=0, microsecond=0)
+    end_9 = start_9 + timedelta(hours=9)
+    res_9 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_9.isoformat(), "end_time": end_9.isoformat()},
+        headers=headers,
+    )
+    assert res_9.status_code == 400
+    assert res_9.json()["code"] == "INVALID_BOOKING_WINDOW"
+
+    # 4. Test Fractional hours (e.g. 1.5 hours): Fail (400)
+    end_frac = start_8 + timedelta(hours=1, minutes=30)
+    res_frac = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_8.isoformat(), "end_time": end_frac.isoformat()},
+        headers=headers,
+    )
+    assert res_frac.status_code == 400
+    assert res_frac.json()["code"] == "INVALID_BOOKING_WINDOW"
+
+    # 5. Test Past booking: Fail (400)
+    start_past = now - timedelta(hours=2)
+    end_past = now - timedelta(hours=1)
+    res_past = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_past.isoformat(), "end_time": end_past.isoformat()},
+        headers=headers,
+    )
+    assert res_past.status_code == 400
+    assert res_past.json()["code"] == "INVALID_BOOKING_WINDOW"
+
+    # 6. Test Equal start/request time: Fail (400)
+    res_eq = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": now.isoformat(), "end_time": (now + timedelta(hours=1)).isoformat()},
+        headers=headers,
+    )
+    assert res_eq.status_code == 400
+    assert res_eq.json()["code"] == "INVALID_BOOKING_WINDOW"
+
+    # 7. Test Invalid end time (end_time before start_time): Fail (400)
+    res_inv_end = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_8.isoformat(), "end_time": (start_8 - timedelta(hours=2)).isoformat()},
+        headers=headers,
+    )
+    assert res_inv_end.status_code == 400
+    assert res_inv_end.json()["code"] == "INVALID_BOOKING_WINDOW"
+
+
