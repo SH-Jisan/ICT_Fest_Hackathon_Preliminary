@@ -117,7 +117,11 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
     if not check_and_revoke_token(data.get("jti")):
         raise AppError(401, "UNAUTHORIZED", "Token has been revoked")
 
-    user = db.query(User).filter(User.id == int(data["sub"])).first()
+    try:
+        user_id = int(data["sub"])
+    except (ValueError, TypeError):
+        raise AppError(401, "UNAUTHORIZED", "Invalid token subject")
+    user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise AppError(401, "UNAUTHORIZED", "Unknown user")
     return {

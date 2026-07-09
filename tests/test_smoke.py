@@ -982,6 +982,28 @@ def test_concurrent_notification_deadlock_safety():
     assert not errors, f"Errors occurred during concurrent execution: {errors}"
 
 
+def test_non_integer_token_subject():
+    import jwt
+    from app.config import JWT_SECRET, JWT_ALGORITHM
+    
+    # 1. Create a token with non-integer sub
+    payload = {
+        "sub": "non-integer-username",
+        "org": 1,
+        "role": "member",
+        "jti": "some-jti-hex",
+        "iat": int(datetime.now(timezone.utc).timestamp()),
+        "exp": int(datetime.now(timezone.utc).timestamp()) + 900,
+        "type": "access",
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    
+    res = client.get("/rooms", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 401
+    assert res.json()["code"] == "UNAUTHORIZED"
+
+
+
 
 
 
