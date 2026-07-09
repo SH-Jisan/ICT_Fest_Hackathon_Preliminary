@@ -136,6 +136,28 @@ def test_booking_rules_compliance():
     assert res_1.status_code == 201
     assert res_1.json()["price_cents"] == 1000
 
+    # 1b. Test Back-to-Back booking: OK (starts exactly at end_1)
+    start_b2b = end_1
+    end_b2b = start_b2b + timedelta(hours=1)
+    res_b2b = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_b2b.isoformat(), "end_time": end_b2b.isoformat()},
+        headers=headers,
+    )
+    assert res_b2b.status_code == 201
+    assert res_b2b.json()["price_cents"] == 1000
+
+    # 1c. Test Overlapping booking: Fail (409 ROOM_CONFLICT)
+    start_overlap = start_1 + timedelta(minutes=30)
+    end_overlap = start_overlap + timedelta(hours=1)
+    res_overlap = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_overlap.isoformat(), "end_time": end_overlap.isoformat()},
+        headers=headers,
+    )
+    assert res_overlap.status_code == 409
+    assert res_overlap.json()["code"] == "ROOM_CONFLICT"
+
     # 2. Test 8-hour booking: OK
     start_8 = (now + timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
     end_8 = start_8 + timedelta(hours=8)
