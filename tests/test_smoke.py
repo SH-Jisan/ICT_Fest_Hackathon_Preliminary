@@ -584,6 +584,77 @@ def test_admin_export_multi_tenancy():
     assert res_export_scoped.json()["code"] == "ROOM_NOT_FOUND"
 
 
+def test_member_booking_visibility_isolation():
+    org = f"visibility-acme-{datetime.now().timestamp()}"
+    # Register Admin to create room
+    client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "vis_admin", "password": "pw12345"},
+    )
+    token_admin = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "vis_admin", "password": "pw12345"},
+    ).json()["access_token"]
+    headers_admin = {"Authorization": f"Bearer {token_admin}"}
+
+    room_id = client.post(
+        "/rooms",
+        json={"name": "Vis Room", "capacity": 10, "hourly_rate_cents": 1000},
+        headers=headers_admin,
+    ).json()["id"]
+
+    # Register member Bob (owner)
+    client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "vis_bob", "password": "pw12345"},
+    )
+    token_bob = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "vis_bob", "password": "pw12345"},
+    ).json()["access_token"]
+    headers_bob = {"Authorization": f"Bearer {token_bob}"}
+
+    # Register member Alice (attacker)
+    client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "vis_alice", "password": "pw12345"},
+    )
+    token_alice = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "vis_alice", "password": "pw12345"},
+    ).json()["access_token"]
+    headers_alice = {"Authorization": f"Bearer {token_alice}"}
+
+    now = datetime.now(timezone.utc)
+    # Bob creates a booking
+    start = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=1)
+    booking_id = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start.isoformat(), "end_time": end.isoformat()},
+        headers=headers_bob,
+    ).json()["id"]
+
+    # 1. Alice attempts to read Bob's booking: must fail with 404 BOOKING_NOT_FOUND
+    res_read = client.get(f"/bookings/{booking_id}", headers=headers_alice)
+    assert res_read.status_code == 404
+    assert res_read.json()["code"] == "BOOKING_NOT_FOUND"
+
+    # 2. Bob can read his own booking: must succeed (200)
+    res_read_bob = client.get(f"/bookings/{booking_id}", headers=headers_bob)
+    assert res_read_bob.status_code == 200
+
+    # 3. Alice attempts to cancel Bob's booking: must fail with 404 BOOKING_NOT_FOUND
+    res_cancel = client.post(f"/bookings/{booking_id}/cancel", headers=headers_alice)
+    assert res_cancel.status_code == 404
+    assert res_cancel.json()["code"] == "BOOKING_NOT_FOUND"
+
+    # 4. Bob can cancel his own booking: must succeed (200)
+    res_cancel_bob = client.post(f"/bookings/{booking_id}/cancel", headers=headers_bob)
+    assert res_cancel_bob.status_code == 200
+
+
+
 
 
 
