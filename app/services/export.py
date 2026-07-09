@@ -23,7 +23,7 @@ def fetch_bookings_raw(db: Session, org_id: int, room_id: int) -> list[Booking]:
     """Load every booking for a single room, ordered by id."""
     return (
         db.query(Booking)
-        .join(Room)
+        .join(Room, Booking.room_id == Room.id)
         .filter(Booking.room_id == room_id, Room.org_id == org_id)
         .order_by(Booking.id.asc())
         .all()
