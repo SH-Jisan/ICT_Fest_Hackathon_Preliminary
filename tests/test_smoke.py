@@ -220,3 +220,111 @@ def test_booking_rules_compliance():
     assert res_inv_end.json()["code"] == "INVALID_BOOKING_WINDOW"
 
 
+def test_booking_quota_limits():
+    org = f"quota-acme-{datetime.now().timestamp()}"
+    reg = client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "quota_alice", "password": "pw12345"},
+    )
+    assert reg.status_code == 201
+    token = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "quota_alice", "password": "pw12345"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    room_id = client.post(
+        "/rooms",
+        json={"name": "Quota Room", "capacity": 4, "hourly_rate_cents": 1000},
+        headers=headers,
+    ).json()["id"]
+
+    now = datetime.now(timezone.utc)
+    # Create 3 bookings within the next 24 hours:
+    # Booking 1: now + 2h -> now + 3h
+    start_1 = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    end_1 = start_1 + timedelta(hours=1)
+    res_1 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_1.isoformat(), "end_time": end_1.isoformat()},
+        headers=headers,
+    )
+    assert res_1.status_code == 201
+
+    # Booking 2: now + 5h -> now + 6h
+    start_2 = (now + timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
+    end_2 = start_2 + timedelta(hours=1)
+    res_2 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_2.isoformat(), "end_time": end_2.isoformat()},
+        headers=headers,
+    )
+    assert res_2.status_code == 201
+
+    # Booking 3: now + 8h -> now + 9h
+    start_3 = (now + timedelta(hours=8)).replace(minute=0, second=0, microsecond=0)
+    end_3 = start_3 + timedelta(hours=1)
+    res_3 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_3.isoformat(), "end_time": end_3.isoformat()},
+        headers=headers,
+    )
+    assert res_3.status_code == 201
+
+    # Booking 4 (in the 24h window): should FAIL
+    start_4 = (now + timedelta(hours=11)).replace(minute=0, second=0, microsecond=0)
+    end_4 = start_4 + timedelta(hours=1)
+    res_4 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_4.isoformat(), "end_time": end_4.isoformat()},
+        headers=headers,
+    )
+    assert res_4.status_code == 409
+    assert res_4.json()["code"] == "QUOTA_EXCEEDED"
+
+    # Booking 5 (outside the 24h window): should SUCCEED
+    start_5 = (now + timedelta(hours=30)).replace(minute=0, second=0, microsecond=0)
+    end_5 = start_5 + timedelta(hours=1)
+    res_5 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_5.isoformat(), "end_time": end_5.isoformat()},
+        headers=headers,
+    )
+    assert res_5.status_code == 201
+
+
+def test_rate_limiting():
+    org = f"rate-acme-{datetime.now().timestamp()}"
+    reg = client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "rate_alice", "password": "pw12345"},
+    )
+    assert reg.status_code == 201
+    token = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "rate_alice", "password": "pw12345"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Hit the bookings endpoint 20 times with invalid data (will fail with 400, but counts)
+    for _ in range(20):
+        res = client.post(
+            "/bookings",
+            json={"room_id": 99999, "start_time": "invalid-time", "end_time": "invalid-time"},
+            headers=headers,
+        )
+        assert res.status_code == 400
+        assert res.json()["code"] == "INVALID_BOOKING_WINDOW"
+
+    # The 21st request should be blocked by the rate limiter (returns 429 RATE_LIMITED)
+    res_21 = client.post(
+        "/bookings",
+        json={"room_id": 99999, "start_time": "invalid-time", "end_time": "invalid-time"},
+        headers=headers,
+    )
+    assert res_21.status_code == 429
+    assert res_21.json()["code"] == "RATE_LIMITED"
+
+
+
+
