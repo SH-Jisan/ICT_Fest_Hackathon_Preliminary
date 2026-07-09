@@ -928,6 +928,61 @@ def test_user_registration_compliance():
     assert res_reg4.json()["code"] == "USERNAME_TAKEN"
 
 
+def test_concurrent_notification_deadlock_safety():
+    from app.services import notifications
+    import threading
+    
+    class FakeBooking:
+        def __init__(self):
+            self.id = 1
+            self.room_id = 1
+            self.user_id = 1
+            self.price_cents = 100
+            
+    booking = FakeBooking()
+    
+    # Temporarily monkeypatch simulated SMTP and audit writes to run faster in tests
+    orig_send_email = notifications._send_email
+    orig_write_audit = notifications._write_audit
+    notifications._send_email = lambda kind, b: None
+    notifications._write_audit = lambda kind, b: None
+    
+    errors = []
+    
+    def run_create():
+        try:
+            for _ in range(100):
+                notifications.notify_created(booking)
+        except Exception as e:
+            errors.append(e)
+            
+    def run_cancel():
+        try:
+            for _ in range(100):
+                notifications.notify_cancelled(booking)
+        except Exception as e:
+            errors.append(e)
+            
+    t1 = threading.Thread(target=run_create)
+    t2 = threading.Thread(target=run_cancel)
+    
+    t1.start()
+    t2.start()
+    
+    t1.join(timeout=5.0)
+    t2.join(timeout=5.0)
+    
+    # Restore original functions
+    notifications._send_email = orig_send_email
+    notifications._write_audit = orig_write_audit
+    
+    # Assert that threads finished (did not deadlock/hang)
+    assert not t1.is_alive(), "notify_created thread deadlocked!"
+    assert not t2.is_alive(), "notify_cancelled thread deadlocked!"
+    assert not errors, f"Errors occurred during concurrent execution: {errors}"
+
+
+
 
 
 
