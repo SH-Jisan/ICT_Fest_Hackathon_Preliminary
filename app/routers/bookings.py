@@ -193,18 +193,18 @@ def cancel_booking(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    booking = (
-        db.query(Booking)
-        .join(Room, Booking.room_id == Room.id)
-        .filter(Booking.id == booking_id, Room.org_id == user.org_id)
-        .first()
-    )
-    if booking is None:
-        raise AppError(404, "BOOKING_NOT_FOUND", "Booking not found")
-    if user.role != "admin" and booking.user_id != user.id:
-        raise AppError(404, "BOOKING_NOT_FOUND", "Booking not found")
-
     with _booking_lock:
+        booking = (
+            db.query(Booking)
+            .join(Room, Booking.room_id == Room.id)
+            .filter(Booking.id == booking_id, Room.org_id == user.org_id)
+            .first()
+        )
+        if booking is None:
+            raise AppError(404, "BOOKING_NOT_FOUND", "Booking not found")
+        if user.role != "admin" and booking.user_id != user.id:
+            raise AppError(404, "BOOKING_NOT_FOUND", "Booking not found")
+
         if booking.status == "cancelled":
             raise AppError(409, "ALREADY_CANCELLED", "Booking already cancelled")
 
@@ -217,9 +217,8 @@ def cancel_booking(
         else:
             refund_percent = 0
 
-        refund_amount_cents = round_half_up(booking.price_cents * (refund_percent / 100.0))
-
-        log_refund(db, booking, refund_percent)
+        refund = log_refund(db, booking, refund_percent)
+        refund_amount_cents = refund.amount_cents
 
         _settlement_pause()
         booking.status = "cancelled"
