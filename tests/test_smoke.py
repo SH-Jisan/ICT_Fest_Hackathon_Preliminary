@@ -539,6 +539,52 @@ def test_auth_logout_and_refresh_rotation():
     assert res_refresh_dup.json()["code"] == "UNAUTHORIZED"
 
 
+def test_admin_export_multi_tenancy():
+    org_a = f"tenant-a-{datetime.now().timestamp()}"
+    org_b = f"tenant-b-{datetime.now().timestamp()}"
+
+    # Register admin for Org A
+    client.post(
+        "/auth/register",
+        json={"org_name": org_a, "username": "admin_a", "password": "pw12345"},
+    )
+    token_a = client.post(
+        "/auth/login",
+        json={"org_name": org_a, "username": "admin_a", "password": "pw12345"},
+    ).json()["access_token"]
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+
+    # Register admin for Org B
+    client.post(
+        "/auth/register",
+        json={"org_name": org_b, "username": "admin_b", "password": "pw12345"},
+    )
+    token_b = client.post(
+        "/auth/login",
+        json={"org_name": org_b, "username": "admin_b", "password": "pw12345"},
+    ).json()["access_token"]
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+
+    # Admin A creates a room in Org A
+    room_a_id = client.post(
+        "/rooms",
+        json={"name": "Org A Room", "capacity": 10, "hourly_rate_cents": 1000},
+        headers=headers_a,
+    ).json()["id"]
+
+    # Admin B attempts to export bookings for Room A (which belongs to Org A)
+    # 1. With include_all = True: must fail with 404 ROOM_NOT_FOUND
+    res_export_all = client.get(f"/admin/export?room_id={room_a_id}&include_all=true", headers=headers_b)
+    assert res_export_all.status_code == 404
+    assert res_export_all.json()["code"] == "ROOM_NOT_FOUND"
+
+    # 2. With include_all = False: must fail with 404 ROOM_NOT_FOUND
+    res_export_scoped = client.get(f"/admin/export?room_id={room_a_id}&include_all=false", headers=headers_b)
+    assert res_export_scoped.status_code == 404
+    assert res_export_scoped.json()["code"] == "ROOM_NOT_FOUND"
+
+
+
 
 
 
