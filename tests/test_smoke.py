@@ -833,6 +833,65 @@ def test_room_availability_current_state():
     assert len(res_avail2.json()["busy"]) == 0
 
 
+def test_room_stats_current_state():
+    org = f"stats-acme-{datetime.now().timestamp()}"
+    client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "stats_admin", "password": "pw12345"},
+    )
+    token = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "stats_admin", "password": "pw12345"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    room_id = client.post(
+        "/rooms",
+        json={"name": "Stats Room", "capacity": 10, "hourly_rate_cents": 1000},
+        headers=headers,
+    ).json()["id"]
+
+    # 1. Verify initial stats are 0
+    res_stats1 = client.get(f"/rooms/{room_id}/stats", headers=headers)
+    assert res_stats1.status_code == 200
+    assert res_stats1.json()["confirmed_booking_count"] == 0
+    assert res_stats1.json()["total_price_cents"] == 0
+
+    # 2. Create a booking
+    start1 = (datetime.now(timezone.utc) + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    end1 = start1 + timedelta(hours=1)
+    booking1_id = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start1.isoformat(), "end_time": end1.isoformat()},
+        headers=headers,
+    ).json()["id"]
+
+    # 3. Create second booking
+    start2 = (datetime.now(timezone.utc) + timedelta(hours=4)).replace(minute=0, second=0, microsecond=0)
+    end2 = start2 + timedelta(hours=1)
+    booking2_id = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start2.isoformat(), "end_time": end2.isoformat()},
+        headers=headers,
+    ).json()["id"]
+
+    # 4. Verify stats updated to 2
+    res_stats2 = client.get(f"/rooms/{room_id}/stats", headers=headers)
+    assert res_stats2.status_code == 200
+    assert res_stats2.json()["confirmed_booking_count"] == 2
+    assert res_stats2.json()["total_price_cents"] == 2000
+
+    # 5. Cancel first booking
+    client.post(f"/bookings/{booking1_id}/cancel", headers=headers)
+
+    # 6. Verify stats immediately updated to 1
+    res_stats3 = client.get(f"/rooms/{room_id}/stats", headers=headers)
+    assert res_stats3.status_code == 200
+    assert res_stats3.json()["confirmed_booking_count"] == 1
+    assert res_stats3.json()["total_price_cents"] == 1000
+
+
+
 
 
 

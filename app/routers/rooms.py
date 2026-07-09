@@ -107,9 +107,11 @@ def room_stats(
     user: User = Depends(get_current_user),
 ):
     room = _get_org_room(db, room_id, user.org_id)
-    current = stats.get(room.id)
+    current = stats.get(db, room.id)
     return {
         "room_id": room.id,
+        "confirmed_booking_count": current["count"],
+        "total_price_cents": current["revenue"],
         "total_confirmed_bookings": current["count"],
         "total_revenue_cents": current["revenue"],
     }
