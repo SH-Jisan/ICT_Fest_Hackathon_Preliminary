@@ -790,6 +790,50 @@ def test_admin_usage_report_current_state():
     assert rooms2_data[room2_id]["revenue_cents"] == 0
 
 
+def test_room_availability_current_state():
+    org = f"avail-acme-{datetime.now().timestamp()}"
+    client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "avail_admin", "password": "pw12345"},
+    )
+    token = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "avail_admin", "password": "pw12345"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    room_id = client.post(
+        "/rooms",
+        json={"name": "Avail Room", "capacity": 10, "hourly_rate_cents": 1000},
+        headers=headers,
+    ).json()["id"]
+
+    start = (datetime.now(timezone.utc) + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=1)
+    
+    # 1. Create booking
+    booking_id = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start.isoformat(), "end_time": end.isoformat()},
+        headers=headers,
+    ).json()["id"]
+
+    # 2. Fetch room availability: slot must be busy
+    res_avail1 = client.get(f"/rooms/{room_id}/availability?date={start.date().isoformat()}", headers=headers)
+    assert res_avail1.status_code == 200
+    assert len(res_avail1.json()["busy"]) == 1
+
+    # 3. Cancel booking
+    res_cancel = client.post(f"/bookings/{booking_id}/cancel", headers=headers)
+    assert res_cancel.status_code == 200
+
+    # 4. Fetch availability again: must be empty immediately (cache invalidated)
+    res_avail2 = client.get(f"/rooms/{room_id}/availability?date={start.date().isoformat()}", headers=headers)
+    assert res_avail2.status_code == 200
+    assert len(res_avail2.json()["busy"]) == 0
+
+
+
 
 
 
