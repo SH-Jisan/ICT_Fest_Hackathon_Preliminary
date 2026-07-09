@@ -436,6 +436,61 @@ def test_cancellation_and_refund_policy():
     assert res_cancel_adm.json()["status"] == "cancelled"
 
 
+def test_reference_code_seeding_and_collision():
+    from app.services import reference
+    org = f"refcode-acme-{datetime.now().timestamp()}"
+    reg = client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "refcode_alice", "password": "pw12345"},
+    )
+    assert reg.status_code == 201
+    token = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "refcode_alice", "password": "pw12345"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    room_id = client.post(
+        "/rooms",
+        json={"name": "Refcode Room", "capacity": 4, "hourly_rate_cents": 1000},
+        headers=headers,
+    ).json()["id"]
+
+    now = datetime.now(timezone.utc)
+    
+    # 1. Create first booking
+    start_1 = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    end_1 = start_1 + timedelta(hours=1)
+    res_1 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_1.isoformat(), "end_time": end_1.isoformat()},
+        headers=headers,
+    )
+    assert res_1.status_code == 201
+    code_1 = res_1.json()["reference_code"]
+    
+    # 2. Simulate server restart by resetting in-memory counter back to 1000
+    reference._counter["value"] = 1000
+    
+    # 3. Create second booking (should query DB for max existing code, seed, and succeed!)
+    start_2 = (now + timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
+    end_2 = start_2 + timedelta(hours=1)
+    res_2 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_2.isoformat(), "end_time": end_2.isoformat()},
+        headers=headers,
+    )
+    assert res_2.status_code == 201
+    code_2 = res_2.json()["reference_code"]
+    
+    # Verify codes are distinct and incremented
+    assert code_1 != code_2
+    num_1 = int(code_1.split("-")[1])
+    num_2 = int(code_2.split("-")[1])
+    assert num_2 > num_1
+
+
+
 
 
 
