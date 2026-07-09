@@ -728,6 +728,69 @@ def test_booking_pagination_and_ordering():
     assert p2_data["items"][0]["id"] == id_3
 
 
+def test_admin_usage_report_current_state():
+    org = f"report-acme-{datetime.now().timestamp()}"
+    client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "rep_admin", "password": "pw12345"},
+    )
+    token = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "rep_admin", "password": "pw12345"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Create 2 rooms
+    room1_id = client.post(
+        "/rooms",
+        json={"name": "Room 1", "capacity": 10, "hourly_rate_cents": 1000},
+        headers=headers,
+    ).json()["id"]
+
+    room2_id = client.post(
+        "/rooms",
+        json={"name": "Room 2", "capacity": 20, "hourly_rate_cents": 2000},
+        headers=headers,
+    ).json()["id"]
+
+    now_date = datetime.now(timezone.utc).date()
+    frm = now_date.isoformat()
+    to = (now_date + timedelta(days=1)).isoformat()
+
+    # 1. Fetch initial report (both must be 0 bookings and 0 revenue)
+    res_rep1 = client.get(f"/admin/usage-report?from={frm}&to={to}", headers=headers)
+    assert res_rep1.status_code == 200
+    rep1_data = res_rep1.json()
+    rooms_data = {r["room_id"]: r for r in rep1_data["rooms"]}
+    
+    assert rooms_data[room1_id]["confirmed_bookings"] == 0
+    assert rooms_data[room1_id]["revenue_cents"] == 0
+    assert rooms_data[room2_id]["confirmed_bookings"] == 0
+    assert rooms_data[room2_id]["revenue_cents"] == 0
+
+    # 2. Create booking in Room 1
+    start = (datetime.now(timezone.utc) + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=1)
+    res_book = client.post(
+        "/bookings",
+        json={"room_id": room1_id, "start_time": start.isoformat(), "end_time": end.isoformat()},
+        headers=headers,
+    )
+    assert res_book.status_code == 201
+
+    # 3. Fetch report again: must show 1 booking for Room 1 immediately (cache invalidated)
+    res_rep2 = client.get(f"/admin/usage-report?from={frm}&to={to}", headers=headers)
+    assert res_rep2.status_code == 200
+    rep2_data = res_rep2.json()
+    rooms2_data = {r["room_id"]: r for r in rep2_data["rooms"]}
+
+    assert rooms2_data[room1_id]["confirmed_bookings"] == 1
+    assert rooms2_data[room1_id]["revenue_cents"] == 1000
+    assert rooms2_data[room2_id]["confirmed_bookings"] == 0
+    assert rooms2_data[room2_id]["revenue_cents"] == 0
+
+
+
 
 
 
