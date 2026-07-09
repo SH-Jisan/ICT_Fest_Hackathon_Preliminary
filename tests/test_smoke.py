@@ -326,5 +326,116 @@ def test_rate_limiting():
     assert res_21.json()["code"] == "RATE_LIMITED"
 
 
+def test_cancellation_and_refund_policy():
+    org = f"refund-acme-{datetime.now().timestamp()}"
+    # Register admin (first user)
+    reg_admin = client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "ref_admin", "password": "pw12345"},
+    )
+    assert reg_admin.status_code == 201
+    token_admin = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "ref_admin", "password": "pw12345"},
+    ).json()["access_token"]
+    headers_admin = {"Authorization": f"Bearer {token_admin}"}
+
+    # Register member (second user)
+    reg_member = client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "ref_member", "password": "pw12345"},
+    )
+    assert reg_member.status_code == 201
+    token_member = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "ref_member", "password": "pw12345"},
+    ).json()["access_token"]
+    headers_member = {"Authorization": f"Bearer {token_member}"}
+
+    # Create room with hourly rate 1001 cents (to test half-cent rounding up: 50% of 1001 is 500.5 -> 501)
+    room = client.post(
+        "/rooms",
+        json={"name": "Refund Room", "capacity": 4, "hourly_rate_cents": 1001},
+        headers=headers_admin,
+    )
+    assert room.status_code == 201
+    room_id = room.json()["id"]
+
+    now = datetime.now(timezone.utc)
+
+    # 1. 100% Refund (notice >= 48 hours)
+    start_48 = (now + timedelta(hours=50)).replace(minute=0, second=0, microsecond=0)
+    end_48 = start_48 + timedelta(hours=1)
+    b_48_id = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_48.isoformat(), "end_time": end_48.isoformat()},
+        headers=headers_member,
+    ).json()["id"]
+
+    # Cancel 48h booking: should get 100% refund (1001 cents)
+    res_cancel_48 = client.post(f"/bookings/{b_48_id}/cancel", headers=headers_member)
+    assert res_cancel_48.status_code == 200
+    assert res_cancel_48.json()["refund_percent"] == 100
+    assert res_cancel_48.json()["refund_amount_cents"] == 1001
+
+    # Check database RefundLog equals response via GET /bookings/{id}
+    b_48_detail = client.get(f"/bookings/{b_48_id}", headers=headers_member).json()
+    assert len(b_48_detail["refunds"]) == 1
+    assert b_48_detail["refunds"][0]["amount_cents"] == 1001
+
+    # 2. 50% Refund (24 <= notice < 48 hours) & Half-cent rounding up (1001 * 50% = 500.5 -> 501)
+    start_24 = (now + timedelta(hours=30)).replace(minute=0, second=0, microsecond=0)
+    end_24 = start_24 + timedelta(hours=1)
+    b_24_id = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_24.isoformat(), "end_time": end_24.isoformat()},
+        headers=headers_member,
+    ).json()["id"]
+
+    # Cancel 24h booking: should get 50% refund rounded up (501 cents)
+    res_cancel_24 = client.post(f"/bookings/{b_24_id}/cancel", headers=headers_member)
+    assert res_cancel_24.status_code == 200
+    assert res_cancel_24.json()["refund_percent"] == 50
+    assert res_cancel_24.json()["refund_amount_cents"] == 501
+
+    # Check database RefundLog equals 501
+    b_24_detail = client.get(f"/bookings/{b_24_id}", headers=headers_member).json()
+    assert b_24_detail["refunds"][0]["amount_cents"] == 501
+
+    # 3. 0% Refund (notice < 24 hours)
+    start_12 = (now + timedelta(hours=12)).replace(minute=0, second=0, microsecond=0)
+    end_12 = start_12 + timedelta(hours=1)
+    b_12_id = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_12.isoformat(), "end_time": end_12.isoformat()},
+        headers=headers_member,
+    ).json()["id"]
+
+    # Cancel 12h booking: should get 0% refund (0 cents)
+    res_cancel_12 = client.post(f"/bookings/{b_12_id}/cancel", headers=headers_member)
+    assert res_cancel_12.status_code == 200
+    assert res_cancel_12.json()["refund_percent"] == 0
+    assert res_cancel_12.json()["refund_amount_cents"] == 0
+
+    # 4. Already Cancelled (returns 409)
+    res_cancel_dup = client.post(f"/bookings/{b_12_id}/cancel", headers=headers_member)
+    assert res_cancel_dup.status_code == 409
+    assert res_cancel_dup.json()["code"] == "ALREADY_CANCELLED"
+
+    # 5. Admin of the same organization can cancel member's booking
+    start_adm = (now + timedelta(hours=40)).replace(minute=0, second=0, microsecond=0)
+    end_adm = start_adm + timedelta(hours=1)
+    b_adm_id = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_adm.isoformat(), "end_time": end_adm.isoformat()},
+        headers=headers_member,
+    ).json()["id"]
+
+    res_cancel_adm = client.post(f"/bookings/{b_adm_id}/cancel", headers=headers_admin)
+    assert res_cancel_adm.status_code == 200
+    assert res_cancel_adm.json()["status"] == "cancelled"
+
+
+
 
 

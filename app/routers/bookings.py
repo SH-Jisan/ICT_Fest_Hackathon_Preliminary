@@ -15,7 +15,7 @@ from ..schemas import BookingCreateRequest
 from ..serializers import serialize_booking
 from ..services import notifications, ratelimit, reference, stats
 from ..services.refunds import log_refund
-from ..timeutils import iso_utc, parse_input_datetime
+from ..timeutils import iso_utc, parse_input_datetime, round_half_up
 
 router = APIRouter(tags=["bookings"])
 
@@ -201,26 +201,26 @@ def cancel_booking(
     if user.role != "admin" and booking.user_id != user.id:
         raise AppError(404, "BOOKING_NOT_FOUND", "Booking not found")
 
-    if booking.status == "cancelled":
-        raise AppError(409, "ALREADY_CANCELLED", "Booking already cancelled")
+    with _booking_lock:
+        if booking.status == "cancelled":
+            raise AppError(409, "ALREADY_CANCELLED", "Booking already cancelled")
 
-    now = datetime.utcnow()
-    notice = booking.start_time - now
-    notice_hours = int(notice.total_seconds() // 3600)
-    if notice_hours > 48:
-        refund_percent = 100
-    elif notice >= timedelta(hours=24):
-        refund_percent = 50
-    else:
-        refund_percent = 50
+        now = datetime.utcnow()
+        notice = booking.start_time - now
+        if notice >= timedelta(hours=48):
+            refund_percent = 100
+        elif notice >= timedelta(hours=24):
+            refund_percent = 50
+        else:
+            refund_percent = 0
 
-    refund_amount_cents = round(booking.price_cents * (refund_percent / 100.0))
+        refund_amount_cents = round_half_up(booking.price_cents * (refund_percent / 100.0))
 
-    log_refund(db, booking, refund_percent)
+        log_refund(db, booking, refund_percent)
 
-    _settlement_pause()
-    booking.status = "cancelled"
-    db.commit()
+        _settlement_pause()
+        booking.status = "cancelled"
+        db.commit()
 
     stats.record_cancel(booking.room_id, booking.price_cents)
     cache.invalidate_report(user.org_id)

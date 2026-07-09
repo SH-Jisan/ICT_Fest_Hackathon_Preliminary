@@ -17,3 +17,8 @@ def parse_input_datetime(value: str) -> datetime:
 def iso_utc(dt: datetime) -> str:
     """Render a stored (naive UTC) datetime with an explicit UTC designator."""
     return dt.replace(tzinfo=timezone.utc).isoformat()
+
+
+def round_half_up(value: float) -> int:
+    """Round positive floats to the nearest integer, half-cents rounding up."""
+    return int(value + 0.5)
