@@ -654,6 +654,81 @@ def test_member_booking_visibility_isolation():
     assert res_cancel_bob.status_code == 200
 
 
+def test_booking_pagination_and_ordering():
+    org = f"page-acme-{datetime.now().timestamp()}"
+    client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "page_admin", "password": "pw12345"},
+    )
+    token = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "page_admin", "password": "pw12345"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    room_id = client.post(
+        "/rooms",
+        json={"name": "Page Room", "capacity": 10, "hourly_rate_cents": 1000},
+        headers=headers,
+    ).json()["id"]
+
+    now = datetime.now(timezone.utc)
+    
+    # Create 3 bookings at different times
+    # Booking 1: now + 5 hours (starts at 5h)
+    start_1 = (now + timedelta(hours=5)).replace(minute=0, second=0, microsecond=0)
+    end_1 = start_1 + timedelta(hours=1)
+    res_1 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_1.isoformat(), "end_time": end_1.isoformat()},
+        headers=headers,
+    )
+    assert res_1.status_code == 201
+    id_1 = res_1.json()["id"]
+
+    # Booking 2: now + 10 hours (starts at 10h)
+    start_2 = (now + timedelta(hours=10)).replace(minute=0, second=0, microsecond=0)
+    end_2 = start_2 + timedelta(hours=1)
+    res_2 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_2.isoformat(), "end_time": end_2.isoformat()},
+        headers=headers,
+    )
+    assert res_2.status_code == 201
+    id_2 = res_2.json()["id"]
+
+    # Booking 3: now + 15 hours (starts at 15h)
+    start_3 = (now + timedelta(hours=15)).replace(minute=0, second=0, microsecond=0)
+    end_3 = start_3 + timedelta(hours=1)
+    res_3 = client.post(
+        "/bookings",
+        json={"room_id": room_id, "start_time": start_3.isoformat(), "end_time": end_3.isoformat()},
+        headers=headers,
+    )
+    assert res_3.status_code == 201
+    id_3 = res_3.json()["id"]
+
+    # 1. Verify Page 1, limit 2
+    res_p1 = client.get("/bookings?page=1&limit=2", headers=headers)
+    assert res_p1.status_code == 200
+    p1_data = res_p1.json()
+    assert p1_data["total"] == 3
+    assert len(p1_data["items"]) == 2
+    # Ascending sort: booking 1 should be first, booking 2 should be second
+    assert p1_data["items"][0]["id"] == id_1
+    assert p1_data["items"][1]["id"] == id_2
+
+    # 2. Verify Page 2, limit 2
+    res_p2 = client.get("/bookings?page=2&limit=2", headers=headers)
+    assert res_p2.status_code == 200
+    p2_data = res_p2.json()
+    assert p2_data["total"] == 3
+    assert len(p2_data["items"]) == 1
+    # Booking 3 should be on page 2
+    assert p2_data["items"][0]["id"] == id_3
+
+
+
 
 
 
