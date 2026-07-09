@@ -10,6 +10,7 @@ from ..auth import (
     hash_password,
     revoke_access_token,
     verify_password,
+    check_and_revoke_token,
 )
 from ..database import get_db
 from ..errors import AppError
@@ -83,6 +84,10 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
     data = decode_token(payload.refresh_token)
     if data.get("type") != "refresh":
         raise AppError(401, "UNAUTHORIZED", "Wrong token type")
+    
+    if not check_and_revoke_token(data.get("jti")):
+        raise AppError(401, "UNAUTHORIZED", "Token has been revoked")
+
     user = db.query(User).filter(User.id == int(data["sub"])).first()
     if user is None:
         raise AppError(401, "UNAUTHORIZED", "Unknown user")

@@ -1,4 +1,5 @@
 """Authentication: password hashing, JWT issue/verify, request dependencies."""
+import threading
 import hashlib
 import hmac
 import os
@@ -22,6 +23,26 @@ from .models import User
 # Access tokens presented to /auth/logout are recorded here so they can no
 # longer be used.
 _revoked_tokens: set[str] = set()
+_revocation_lock = threading.Lock()
+
+
+def check_and_revoke_token(jti: str) -> bool:
+    """Atomically check if a token jti is revoked, and if not, revoke it."""
+    if not jti:
+        return False
+    with _revocation_lock:
+        if jti in _revoked_tokens:
+            return False
+        _revoked_tokens.add(jti)
+        return True
+
+
+def is_token_revoked(jti: str) -> bool:
+    """Check if a token jti has been revoked (thread-safe)."""
+    if not jti:
+        return False
+    with _revocation_lock:
+        return jti in _revoked_tokens
 
 _PBKDF2_ROUNDS = 100_000
 
@@ -83,7 +104,7 @@ def decode_token(token: str) -> dict:
 
 
 def revoke_access_token(payload: dict) -> None:
-    _revoked_tokens.add(payload["jti"])
+    check_and_revoke_token(payload.get("jti"))
 
 
 def get_token_payload(request: Request) -> dict:
@@ -94,7 +115,7 @@ def get_token_payload(request: Request) -> dict:
     payload = decode_token(token)
     if payload.get("type") != "access":
         raise AppError(401, "UNAUTHORIZED", "Wrong token type")
-    if payload.get("sub") in _revoked_tokens:
+    if is_token_revoked(payload.get("jti")):
         raise AppError(401, "UNAUTHORIZED", "Token has been revoked")
     return payload
 

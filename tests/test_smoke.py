@@ -490,6 +490,56 @@ def test_reference_code_seeding_and_collision():
     assert num_2 > num_1
 
 
+def test_auth_logout_and_refresh_rotation():
+    org = f"jwt-acme-{datetime.now().timestamp()}"
+    # 1. Register and login
+    reg = client.post(
+        "/auth/register",
+        json={"org_name": org, "username": "jwt_alice", "password": "pw12345"},
+    )
+    assert reg.status_code == 201
+    
+    tokens = client.post(
+        "/auth/login",
+        json={"org_name": org, "username": "jwt_alice", "password": "pw12345"},
+    ).json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens["refresh_token"]
+    
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    # 2. Test access token works on protected endpoint
+    res_rooms = client.get("/rooms", headers=headers)
+    assert res_rooms.status_code == 200
+    
+    # 3. Perform logout
+    res_logout = client.post("/auth/logout", headers=headers)
+    assert res_logout.status_code == 200
+    
+    # 4. Access token must be rejected after logout
+    res_rooms_after = client.get("/rooms", headers=headers)
+    assert res_rooms_after.status_code == 401
+    assert res_rooms_after.json()["code"] == "UNAUTHORIZED"
+    
+    # Logout again with same token: must fail
+    res_logout_after = client.post("/auth/logout", headers=headers)
+    assert res_logout_after.status_code == 401
+    assert res_logout_after.json()["code"] == "UNAUTHORIZED"
+
+    # 5. Test refresh token rotation
+    res_refresh = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    assert res_refresh.status_code == 200
+    new_tokens = res_refresh.json()
+    assert new_tokens["access_token"] != access_token
+    assert new_tokens["refresh_token"] != refresh_token
+    
+    # 6. Reusing old refresh token must be rejected
+    res_refresh_dup = client.post("/auth/refresh", json={"refresh_token": refresh_token})
+    assert res_refresh_dup.status_code == 401
+    assert res_refresh_dup.json()["code"] == "UNAUTHORIZED"
+
+
+
 
 
 
